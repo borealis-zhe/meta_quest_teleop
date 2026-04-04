@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """ROS2 node for publishing Meta Quest hand transforms to TF.
 
-This node uses MetaQuestReader to get hand transforms and publishes
-them to ROS2 TF in the meta_world frame. The coordinate system conversion
-from OpenXR to ROS is handled by tf2 via a static transform publisher.
-
-This follows the correct ROS2 tf2 approach:
-1. Publish Meta Quest data in its own frame (meta_world)
-2. Use static_transform_publisher to link meta_world to ROS world frame
-3. Let tf2 handle all coordinate system transformations automatically
+This node uses MetaQuestReader to get hand transforms and publishes them
+to ROS2 TF/topics in ROS coordinates. A static `meta_world` frame is still
+published for debugging, but controller poses themselves are converted from
+OpenXR into ROS before publishing so their local axes match ROS conventions.
 
 The node also handles homing/relative tracking functionality for TF transforms
 by setting a home pose with Button B and resetting with Button A. Pose topics
@@ -43,15 +39,20 @@ class MetaQuestTFPublisher(Node):
         super().__init__("meta_quest_tf_publisher")
 
         # Declare parameters with proper typed defaults
-        ip_address = None
+        ip_address = "192.168.5.227" # None if using USB
         port = 5555
         update_rate = 50.0
 
         # Convert empty string to None for optional IP address
 
-        # Publish Meta Quest data in its own frame - tf2 handles conversion
         self.world_frame = "map"
         self.meta_frame = "meta_world"
+        self.openxr_to_ros_basis = Rotation.from_quat(
+            [0.5, -0.5, -0.5, 0.5] # xyzw
+        ).as_matrix()
+        self.controller_orientation_offset = Rotation.from_euler(
+            "y", 90.0, degrees=True
+        ).as_matrix()
 
         # Define transform types and frame names
         self.transform_types = ["grip", "pointer", "model"]
@@ -137,10 +138,10 @@ class MetaQuestTFPublisher(Node):
         self.get_logger().info("")
         self.get_logger().info("✅ Static transform published: map -> meta_world")
         self.get_logger().info(
-            "✅ Meta Quest transforms published in meta_world frame (OpenXR)"
+            "✅ Hand TF/topics are published in ROS coordinates under map"
         )
         self.get_logger().info(
-            "✅ tf2 automatically handles coordinate system conversion"
+            "✅ Controller local axes are converted from OpenXR to ROS"
         )
         self.get_logger().info("")
         self.get_logger().info("Press button B to set home pose for TF (zero position)")
@@ -176,6 +177,18 @@ class MetaQuestTFPublisher(Node):
         self.get_logger().info(
             f"Published static transform: {self.world_frame} -> {self.meta_frame}"
         )
+
+    def _convert_openxr_to_ros_transform(self, transform: np.ndarray) -> np.ndarray:
+        """Convert a 4x4 transform from OpenXR coordinates to ROS coordinates."""
+        transform_ros = np.eye(4)
+        transform_ros[:3, 3] = self.openxr_to_ros_basis @ transform[:3, 3] # 平移变换
+        transform_ros[:3, :3] = (
+            self.openxr_to_ros_basis
+            @ transform[:3, :3]
+            @ self.openxr_to_ros_basis.T
+            @ self.controller_orientation_offset
+        ) # 旋转矩阵的坐标系变换
+        return transform_ros
 
     def _on_button_b_pressed(self) -> None:
         """Set home pose for relative tracking (all hands, all transform types)."""
@@ -286,9 +299,9 @@ class MetaQuestTFPublisher(Node):
         """Convert 4x4 transform matrix to TransformStamped.
 
         Args:
-            matrix: 4x4 transform matrix (OpenXR coordinates).
+            matrix: 4x4 transform matrix (ROS coordinates).
                    See README.md "Coordinate Systems: ROS vs OpenXR" section.
-            frame_id: Parent frame ID (typically 'meta_world')
+            frame_id: Parent frame ID (typically 'map')
             child_frame_id: Child frame ID (hand frame name)
 
         Returns:
@@ -441,8 +454,18 @@ class MetaQuestTFPublisher(Node):
             "right"
         )
         left_transform_openxr = self.reader.get_hand_controller_transform_openxr("left")
-        right_transform_ros = self.reader.get_hand_controller_transform_ros("right")
-        left_transform_ros = self.reader.get_hand_controller_transform_ros("left")
+        right_transform_ros = None
+        left_transform_ros = None
+
+        if right_transform_openxr is not None:
+            right_transform_ros = self._convert_openxr_to_ros_transform(
+                right_transform_openxr
+            )
+
+        if left_transform_openxr is not None:
+            left_transform_ros = self._convert_openxr_to_ros_transform(
+                left_transform_openxr
+            )
 
         for transform_type in self.transform_types:
             # Publish right hand transform
@@ -450,11 +473,14 @@ class MetaQuestTFPublisher(Node):
                 right_relative_transform = self.get_transform_relative_to_home(
                     right_transform_openxr, self.home_poses_right[transform_type]
                 )
+                right_relative_transform_ros = self._convert_openxr_to_ros_transform(
+                    right_relative_transform
+                )
 
                 # Convert to ROS2 message and publish to TF
                 right_tf_msg = self._matrix_to_transform_stamped(
-                    right_relative_transform,
-                    self.meta_frame,
+                    right_relative_transform_ros,
+                    self.world_frame,
                     self.right_hand_frames[transform_type],
                 )
 
@@ -480,11 +506,14 @@ class MetaQuestTFPublisher(Node):
                 left_relative_transform = self.get_transform_relative_to_home(
                     left_transform_openxr, self.home_poses_left[transform_type]
                 )
+                left_relative_transform_ros = self._convert_openxr_to_ros_transform(
+                    left_relative_transform
+                )
 
                 # Convert to ROS2 message and publish to TF
                 left_tf_msg = self._matrix_to_transform_stamped(
-                    left_relative_transform,
-                    self.meta_frame,
+                    left_relative_transform_ros,
+                    self.world_frame,
                     self.left_hand_frames[transform_type],
                 )
 
