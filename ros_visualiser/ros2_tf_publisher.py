@@ -20,7 +20,7 @@ from typing import Optional
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped, TransformStamped, TwistStamped, Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
 from rclpy.node import Node
 from rclpy.time import Time
 from scipy.spatial.transform import Rotation
@@ -120,6 +120,7 @@ class MetaQuestTFPublisher(Node):
         self.robot_twist_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
         self.reset_anchor_publisher = self.create_publisher(Bool, "/reset_hand_anchor", 10)
         self.back_to_default_publisher = self.create_publisher(Bool, "/hand_back_to_default", 10)
+        self.robot_force_cmd_publisher = self.create_publisher(Float32, "/lower_force_cmd", 10)
 
         # Track previous poses and time for velocity calculation
         self.prev_poses: dict[str, np.ndarray] = {}
@@ -563,6 +564,20 @@ class MetaQuestTFPublisher(Node):
         robot_vel_cmd.angular.y = float(0)
         robot_vel_cmd.angular.z = float(-w_z[0])
         self.robot_twist_publisher.publish(robot_vel_cmd)
+        #====================================
+        # 发布机器人force command
+        l_trig = self.reader.get_trigger_value("left")
+        r_trig = self.reader.get_trigger_value("right")
+        force_cmd = Float32()
+        if (l_trig > 0.8) and (r_trig < 0.8):
+            force_cmd.data = 1.0
+            self.robot_force_cmd_publisher.publish(force_cmd)
+        if (l_trig < 0.8) and (r_trig > 0.8):
+            force_cmd.data = -1.0
+            self.robot_force_cmd_publisher.publish(force_cmd)
+        if (l_trig > 0.8) and (r_trig > 0.8):
+           force_cmd.data = 0.0
+           self.robot_force_cmd_publisher.publish(force_cmd)
         #====================================
 
         # Update time for next velocity calculation
