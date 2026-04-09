@@ -1,5 +1,6 @@
 """Buttons parser for Meta Quest Reader."""
 
+from __future__ import annotations
 from typing import Any
 
 

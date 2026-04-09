@@ -13,12 +13,14 @@ are always published in absolute coordinates.
 See README.md "Coordinate Systems: ROS vs OpenXR" section for details on
 coordinate system differences and conversions.
 """
+from __future__ import annotations
 
 from typing import Optional
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped, TransformStamped, TwistStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped, TwistStamped, Twist
+from std_msgs.msg import Bool
 from rclpy.node import Node
 from rclpy.time import Time
 from scipy.spatial.transform import Rotation
@@ -39,7 +41,7 @@ class MetaQuestTFPublisher(Node):
         super().__init__("meta_quest_tf_publisher")
 
         # Declare parameters with proper typed defaults
-        ip_address = "192.168.5.227" # None if using USB
+        ip_address = "10.42.0.186" # None if using USB
         port = 5555
         update_rate = 50.0
 
@@ -87,8 +89,8 @@ class MetaQuestTFPublisher(Node):
         self.get_logger().info("Connected to Meta Quest!")
 
         # Register button callbacks
-        self.reader.on("button_b_pressed", self._on_button_b_pressed)
-        self.reader.on("button_a_pressed", self._on_button_a_pressed)
+        self.reader.on("button_b_pressed", self._on_button_b_pressed_back_to_default)
+        self.reader.on("button_a_pressed", self._on_button_a_pressed_reset_anchor)
 
         # Initialize TF broadcasters
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -107,13 +109,17 @@ class MetaQuestTFPublisher(Node):
                 )
 
         # Create publishers for velocities
-        self.twist_publishers = {}
-        for hand in ["left", "right"]:
-            for transform_type in self.transform_types:
-                topic_name = f"/meta_quest/{hand}_{transform_type}_velocity"
-                self.twist_publishers[f"{hand}_{transform_type}"] = (
-                    self.create_publisher(TwistStamped, topic_name, 10)
-                )
+        # self.twist_publishers = {}
+        # for hand in ["left", "right"]:
+        #     for transform_type in self.transform_types:
+        #         topic_name = f"/meta_quest/{hand}_{transform_type}_velocity"
+        #         self.twist_publishers[f"{hand}_{transform_type}"] = (
+        #             self.create_publisher(TwistStamped, topic_name, 10)
+        #         )
+
+        self.robot_twist_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.reset_anchor_publisher = self.create_publisher(Bool, "/reset_hand_anchor", 10)
+        self.back_to_default_publisher = self.create_publisher(Bool, "/hand_back_to_default", 10)
 
         # Track previous poses and time for velocity calculation
         self.prev_poses: dict[str, np.ndarray] = {}
@@ -146,7 +152,7 @@ class MetaQuestTFPublisher(Node):
         self.get_logger().info("")
         self.get_logger().info("Press button B to set home pose for TF (zero position)")
         self.get_logger().info(
-            "Press button A to reset home pose for TF (absolute tracking)"
+            "Press button A to reset hand anchor pose"
         )
 
     def _publish_static_transform(self) -> None:
@@ -230,6 +236,16 @@ class MetaQuestTFPublisher(Node):
         self.get_logger().info(
             "🔄 Home pose reset for TF! Tracking in absolute coordinates."
         )
+
+    def _on_button_a_pressed_reset_anchor(self) -> None:
+        reset_anchor_msg = Bool()
+        reset_anchor_msg.data = True
+        self.reset_anchor_publisher.publish(reset_anchor_msg)
+
+    def _on_button_b_pressed_back_to_default(self) -> None:
+        back_to_default = Bool()
+        back_to_default.data = True
+        self.back_to_default_publisher.publish(back_to_default)
 
     def _log_home_set(
         self, hand: str, transform_type: str, transform: np.ndarray
@@ -497,9 +513,9 @@ class MetaQuestTFPublisher(Node):
                     )
 
                 # Publish velocity
-                self._publish_velocity(
-                    "right", transform_type, right_transform_ros, current_time
-                )
+                # self._publish_velocity(
+                #     "right", transform_type, right_transform_ros, current_time
+                # )
 
             # Publish left hand transform
             if left_transform_openxr is not None:
@@ -530,9 +546,24 @@ class MetaQuestTFPublisher(Node):
                     )
 
                 # Publish velocity
-                self._publish_velocity(
-                    "left", transform_type, left_transform_ros, current_time
-                )
+                # self._publish_velocity(
+                #     "left", transform_type, left_transform_ros, current_time
+                # )
+        #====================================
+        # 发布机器人locomotion command
+        vel_xy = self.reader.get_joystick_value("left")
+        w_z = self.reader.get_joystick_value("right")
+        robot_vel_cmd = Twist()
+        # Linear velocity (m/s)
+        robot_vel_cmd.linear.x = float(vel_xy[1])
+        robot_vel_cmd.linear.y = float(-vel_xy[0])
+        robot_vel_cmd.linear.z = float(0)
+        # Angular velocity (rad/s)
+        robot_vel_cmd.angular.x = float(0)
+        robot_vel_cmd.angular.y = float(0)
+        robot_vel_cmd.angular.z = float(-w_z[0])
+        self.robot_twist_publisher.publish(robot_vel_cmd)
+        #====================================
 
         # Update time for next velocity calculation
         self.prev_time = current_time
