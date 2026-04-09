@@ -41,7 +41,7 @@ class MetaQuestTFPublisher(Node):
         super().__init__("meta_quest_tf_publisher")
 
         # Declare parameters with proper typed defaults
-        ip_address = "10.42.0.186" # None if using USB
+        ip_address = "192.168.12.126" # None if using USB
         port = 5555
         update_rate = 50.0
 
