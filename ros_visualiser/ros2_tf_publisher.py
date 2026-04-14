@@ -91,6 +91,8 @@ class MetaQuestTFPublisher(Node):
         # Register button callbacks
         self.reader.on("button_b_pressed", self._on_button_b_pressed_back_to_default)
         self.reader.on("button_a_pressed", self._on_button_a_pressed_reset_anchor)
+        self.reader.on("button_x_pressed", self._on_button_x_pressed_switch_lower_policy)
+        self.reader.on("button_y_pressed", self._on_button_y_pressed_upper_teleop_pause)
 
         # Initialize TF broadcasters
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -121,6 +123,13 @@ class MetaQuestTFPublisher(Node):
         self.reset_anchor_publisher = self.create_publisher(Bool, "/reset_hand_anchor", 10)
         self.back_to_default_publisher = self.create_publisher(Bool, "/hand_back_to_default", 10)
         self.robot_force_cmd_publisher = self.create_publisher(Float32, "/lower_force_cmd", 10)
+        self.switch_lower_policy_publisher = self.create_publisher(Bool, "/switch_lower_to_alt_policy", 10)
+        self.upper_teleop_pause_publisher = self.create_publisher(Bool, "/upper_teleop_pause", 10)
+        self.left_hand_control = self.create_publisher(Bool, "/left_hand_control", 10)
+        self.upper_teleop_pause = False
+        self.right_hand_control = self.create_publisher(Bool, "/right_hand_control", 10)
+        self.left_hand_open = True
+        self.right_hand_open = True
 
         # Track previous poses and time for velocity calculation
         self.prev_poses: dict[str, np.ndarray] = {}
@@ -247,6 +256,17 @@ class MetaQuestTFPublisher(Node):
         back_to_default = Bool()
         back_to_default.data = True
         self.back_to_default_publisher.publish(back_to_default)
+    
+    def _on_button_x_pressed_switch_lower_policy(self) -> None:
+        switch_lower_policy = Bool()
+        switch_lower_policy.data = True
+        self.switch_lower_policy_publisher.publish(switch_lower_policy)
+
+    def _on_button_y_pressed_upper_teleop_pause(self) -> None:
+        self.upper_teleop_pause = not self.upper_teleop_pause
+        upper_teleop_pause = Bool()
+        upper_teleop_pause.data = self.upper_teleop_pause
+        self.upper_teleop_pause_publisher.publish(upper_teleop_pause)
 
     def _log_home_set(
         self, hand: str, transform_type: str, transform: np.ndarray
@@ -578,6 +598,20 @@ class MetaQuestTFPublisher(Node):
         if (l_trig > 0.8) and (r_trig > 0.8):
            force_cmd.data = 0.0
            self.robot_force_cmd_publisher.publish(force_cmd)
+        #====================================
+        # 发布灵巧手开合命令
+        l_grip = self.reader.get_grip_value("left")
+        r_grip = self.reader.get_grip_value("right")
+        if l_grip > 0.8:
+            self.left_hand_open = not self.left_hand_open
+            left_hand_control = Bool()
+            left_hand_control.data = self.left_hand_open
+            self.left_hand_control.publish(left_hand_control)
+        if r_grip > 0.8:
+            self.right_hand_open = not self.right_hand_open
+            right_hand_control = Bool()
+            right_hand_control.data = self.right_hand_open
+            self.right_hand_control.publish(right_hand_control)
         #====================================
 
         # Update time for next velocity calculation
